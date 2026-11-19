@@ -1,6 +1,8 @@
+import difflib
 import json
 import re
 import traceback
+import unicodedata
 import gspread
 import pandas as pd
 import streamlit as st
@@ -26,6 +28,50 @@ COLUNAS_OFICIAIS = [
     "Endereço / Local",
     "Observações",
 ]
+
+
+def normalizar_busca(texto: str) -> str:
+  if not texto:
+    return ""
+  texto = str(texto).lower()
+  texto = texto.replace("ª", "a").replace("º", "o").replace("°", "o")
+  texto = unicodedata.normalize("NFKD", texto)
+  texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+  texto = re.sub(r"[^a-z0-9@.\s]", " ", texto)
+  texto = re.sub(r"\s+", " ", texto).strip()
+  return texto
+
+
+def token_parecido(termo_tok: str, alvo_norm: str, palavras_alvo: list) -> bool:
+  if termo_tok in alvo_norm:
+    return True
+  # Tolerância a pequenas distorções/erros de digitação em palavras com 4+ letras
+  if len(termo_tok) >= 4:
+    for pal in palavras_alvo:
+      if abs(len(pal) - len(termo_tok)) <= 2:
+        ratio = difflib.SequenceMatcher(None, termo_tok, pal).ratio()
+        if ratio >= 0.78:
+          return True
+  return False
+
+
+def corresponde_busca(row_series: pd.Series, termo: str) -> bool:
+  termo_norm = normalizar_busca(termo)
+  if not termo_norm:
+    return True
+
+  texto_linha = " ".join(
+      str(v) for v in row_series.values if pd.notna(v) and str(v) != "nan"
+  )
+  alvo_norm = normalizar_busca(texto_linha)
+  if termo_norm in alvo_norm:
+    return True
+
+  palavras_alvo = alvo_norm.split()
+  termos_tokens = termo_norm.split()
+  return all(
+      token_parecido(tok, alvo_norm, palavras_alvo) for tok in termos_tokens
+  )
 
 
 def conectar_planilha():
@@ -127,12 +173,10 @@ with aba_consulta:
     termo = st.text_input(
         "🔍 Pesquisar Órgão, Autoridade ou Cargo:",
         "",
-        placeholder="Ex: Fórum, Delegacia, Promotoria...",
+        placeholder="Ex: forum, 3a vara, luziania, delegacia...",
     )
     if termo:
-      mask = df.astype(str).apply(
-          lambda x: x.str.contains(termo, case=False, na=False)
-      ).any(axis=1)
+      mask = df.apply(lambda row: corresponde_busca(row, termo), axis=1)
       df_filtrado = df[mask]
     else:
       df_filtrado = df
