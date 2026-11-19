@@ -1,16 +1,21 @@
 import json
 import re
+import traceback
 import gspread
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Agenda de Autoridades - Fórum", page_icon="🏛️", layout="wide"
+    page_title="Agenda de Autoridades - Fórum",
+    page_icon="🏛️",
+    layout="wide",
 )
 st.title("🏛️ Agenda de Autoridades e Órgãos")
 
 SHEET_ID = "1PWxjWALBtB_SNNHIwPErRu5mVn5PEkZv3B8MEP79Hfg"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+SHEET_URL = (
+    f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+)
 
 COLUNAS_OFICIAIS = [
     "Órgão / Instituição",
@@ -24,7 +29,19 @@ COLUNAS_OFICIAIS = [
 
 
 def conectar_planilha():
-  credenciais_dict = json.loads(st.secrets["gcp_json"])
+  raw_secret = st.secrets["gcp_json"]
+  if isinstance(raw_secret, str):
+    credenciais_dict = json.loads(raw_secret)
+  else:
+    credenciais_dict = dict(raw_secret)
+
+  if "private_key" in credenciais_dict and isinstance(
+      credenciais_dict["private_key"], str
+  ):
+    credenciais_dict["private_key"] = credenciais_dict["private_key"].replace(
+        "\\n", "\n"
+    )
+
   gc = gspread.service_account_from_dict(credenciais_dict)
   planilha = gc.open_by_key(SHEET_ID)
   return planilha.sheet1
@@ -60,7 +77,9 @@ def organizar_e_limpar_lista(texto_bruto: str) -> list:
     else:
       linhas_unidas.append(linha)
 
-  regex_telefone = re.compile(r"(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}")
+  regex_telefone = re.compile(
+      r"(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}"
+  )
   novas_linhas = []
 
   for linha in linhas_unidas:
@@ -170,7 +189,9 @@ with aba_alimentador:
         try:
           linhas_prontas = organizar_e_limpar_lista(texto_entrada)
           aba_sheet = conectar_planilha()
-          aba_sheet.append_rows(linhas_prontas, value_input_option="USER_ENTERED")
+          aba_sheet.append_rows(
+              linhas_prontas, value_input_option="USER_ENTERED"
+          )
           st.cache_data.clear()
           st.success(
               f"✅ Pronto! {len(linhas_prontas)} contatos foram organizados e"
@@ -181,6 +202,7 @@ with aba_alimentador:
               use_container_width=True,
           )
         except Exception as e:
-          st.error(f"Erro ao gravar na planilha: {e}")
+          st.error(f"Erro ao gravar na planilha: {type(e).__name__}: {e}")
+          st.code(traceback.format_exc(), language="text")
     else:
       st.warning("Cole uma lista antes de clicar no botão.")
