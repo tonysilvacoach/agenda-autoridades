@@ -77,6 +77,67 @@ def corresponde_busca(row_series: pd.Series, termo: str) -> bool:
   )
 
 
+def extrair_cidades_disponiveis(df: pd.DataFrame) -> list:
+  cidades_conhecidas = [
+      "Formosa",
+      "Luziânia",
+      "Goiânia",
+      "Unaí",
+      "Planaltina",
+      "Brasília",
+      "Águas Lindas",
+      "Valparaíso",
+      "Cristalina",
+      "Padre Bernardo",
+      "Cabeceiras",
+      "Flores de Goiás",
+  ]
+  encontradas = set()
+  for _, row in df.iterrows():
+    texto = " ".join(
+        str(v) for v in row.values if pd.notna(v) and str(v) != "nan"
+    )
+    texto_norm = normalizar_busca(texto)
+    for cid in cidades_conhecidas:
+      if normalizar_busca(cid) in texto_norm:
+        encontradas.add(cid)
+    # Captura padrões tipo "Cidade/UF" ou "Cidade - UF"
+    for m in re.finditer(
+        r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+){0,2})\s*[/\-]\s*(?:GO|MG|DF|BA|TO|MT|MS|SP|RJ)\b",
+        texto,
+    ):
+      cand = m.group(1).strip().title()
+      if len(cand) >= 3:
+        encontradas.add(cand)
+  return sorted(encontradas)
+
+
+def formatar_contato_copiar(row: pd.Series) -> str:
+  orgao = str(row.get("Órgão / Instituição", ""))
+  cargo = str(row.get("Cargo / Função", ""))
+  autoridade = str(row.get("Nome da Autoridade", ""))
+  telefone = str(row.get("Telefone / WhatsApp", ""))
+  email = str(row.get("E-mail Institucional", ""))
+  endereco = str(row.get("Endereço / Local", ""))
+
+  partes = []
+  if orgao and orgao != "nan":
+    partes.append(orgao)
+  if cargo and cargo != "nan" and autoridade and autoridade != "nan":
+    partes.append(f"{cargo}: {autoridade}")
+  elif autoridade and autoridade != "nan":
+    partes.append(autoridade)
+  elif cargo and cargo != "nan":
+    partes.append(cargo)
+  if telefone and telefone != "nan":
+    partes.append(f"Tel: {telefone}")
+  if email and email != "nan":
+    partes.append(f"E-mail: {email}")
+  if endereco and endereco != "nan":
+    partes.append(f"Local: {endereco}")
+  return " | ".join(partes)
+
+
 def conectar_planilha():
   raw_secret = st.secrets["gcp_json"]
   if isinstance(raw_secret, str):
@@ -276,20 +337,35 @@ aba_consulta, aba_alimentador = st.tabs([
 with aba_consulta:
   df = carregar_dados()
   if not df.empty:
-    termo = st.text_input(
-        "🔍 Pesquisar Órgão, Autoridade, Cargo ou Local:",
-        "",
-        placeholder="Ex: forum, 3a vara, formosa, luziania, delegacia...",
-    )
+    col_busca, col_cidade = st.columns([3, 1])
+    with col_busca:
+      termo = st.text_input(
+          "🔍 Pesquisar Órgão, Autoridade, Cargo ou Local:",
+          "",
+          placeholder="Ex: forum, 3a vara, luziania, delegacia...",
+      )
+    with col_cidade:
+      opcoes_cidade = ["Todas"] + extrair_cidades_disponiveis(df)
+      cidade_selecionada = st.selectbox(
+          "📍 Cidade / Comarca:", opcoes_cidade, index=0
+      )
+
+    df_filtrado = df.copy()
+    if cidade_selecionada != "Todas":
+      df_filtrado = df_filtrado[
+          df_filtrado.apply(
+              lambda row: corresponde_busca(row, cidade_selecionada), axis=1
+          )
+      ]
     if termo:
-      mask = df.apply(lambda row: corresponde_busca(row, termo), axis=1)
-      df_filtrado = df[mask]
-    else:
-      df_filtrado = df
+      mask = df_filtrado.apply(
+          lambda row: corresponde_busca(row, termo), axis=1
+      )
+      df_filtrado = df_filtrado[mask]
 
     st.markdown(f"**Total de registros:** {len(df_filtrado)}")
     st.markdown("---")
-    for _, row in df_filtrado.iterrows():
+    for idx, row in df_filtrado.iterrows():
       orgao = str(row.get("Órgão / Instituição", ""))
       cargo = str(row.get("Cargo / Função", ""))
       autoridade = str(row.get("Nome da Autoridade", ""))
@@ -322,6 +398,9 @@ with aba_consulta:
             st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
         if obs != "nan" and obs:
           st.info(f"💡 **Observações:** {obs}")
+
+        with st.expander(f"📋 Copiar contato rápido #{idx + 1}"):
+          st.code(formatar_contato_copiar(row), language="text")
         st.markdown("---")
 
 with aba_alimentador:
