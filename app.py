@@ -60,7 +60,7 @@ SHEET_ID = "1PWxjWALBtB_SNNHIwPErRu5mVn5PEkZv3B8MEP79Hfg"
 SHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 )
-HEADER_ROW_INDEX = 5  # Linha 5 na planilha (equivalente a skiprows=4 no CSV)
+HEADER_ROW_INDEX = 5
 
 COLUNAS_OFICIAIS = [
     "Órgão / Instituição",
@@ -121,40 +121,6 @@ def corresponde_busca(row_series: pd.Series, termo: str) -> bool:
   return all(
       token_parecido(tok, alvo_norm, palavras_alvo) for tok in termos_tokens
   )
-
-
-def extrair_cidades_disponiveis(df: pd.DataFrame) -> list:
-  cidades_conhecidas = [
-      "Formosa",
-      "Luziânia",
-      "Goiânia",
-      "Unaí",
-      "Planaltina",
-      "Brasília",
-      "Águas Lindas",
-      "Valparaíso",
-      "Cristalina",
-      "Padre Bernardo",
-      "Cabeceiras",
-      "Flores de Goiás",
-  ]
-  encontradas = set()
-  for _, row in df.iterrows():
-    texto = " ".join(
-        limpar_valor(v) for v in row.values if limpar_valor(v)
-    )
-    texto_norm = normalizar_busca(texto)
-    for cid in cidades_conhecidas:
-      if normalizar_busca(cid) in texto_norm:
-        encontradas.add(cid)
-    for m in re.finditer(
-        r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+){0,2})\s*[/\-]\s*(?:GO|MG|DF|BA|TO|MT|MS|SP|RJ)\b",
-        texto,
-    ):
-      cand = m.group(1).strip().title()
-      if len(cand) >= 3:
-        encontradas.add(cand)
-  return sorted(encontradas)
 
 
 def montar_link_whatsapp(telefone_texto: str) -> str:
@@ -220,7 +186,6 @@ def conectar_planilha():
 def carregar_dados():
   try:
     df = pd.read_csv(SHEET_URL, skiprows=4)
-    # Preserva o número exato da linha no Google Sheets (linha 6 é índice 0 após skiprows=4)
     df["_linha_sheet"] = df.index + HEADER_ROW_INDEX + 1
     df = df.dropna(subset=["Órgão / Instituição"]).copy()
     for col in COLUNAS_OFICIAIS:
@@ -426,10 +391,8 @@ def verificar_duplicados(
   return duplicados
 
 
-def limpar_filtros_callback():
+def limpar_busca_callback():
   st.session_state["busca_termo"] = ""
-  st.session_state["busca_cidade"] = "Todas"
-  st.session_state["ordenacao_lista"] = "Padrão da planilha"
 
 
 df_base = carregar_dados()
@@ -444,59 +407,24 @@ with aba_consulta:
   if not df_base.empty:
     if "busca_termo" not in st.session_state:
       st.session_state["busca_termo"] = ""
-    if "busca_cidade" not in st.session_state:
-      st.session_state["busca_cidade"] = "Todas"
-    if "ordenacao_lista" not in st.session_state:
-      st.session_state["ordenacao_lista"] = "Padrão da planilha"
 
-    col_busca, col_cidade, col_ordem = st.columns([3, 1.3, 1.3])
+    col_busca, col_limpar = st.columns([5, 1])
     with col_busca:
       termo = st.text_input(
           "🔍 Pesquisar Órgão, Autoridade, Cargo ou Local:",
           key="busca_termo",
           placeholder="Ex: forum, 3a vara, luziania, delegacia...",
       )
-    with col_cidade:
-      opcoes_cidade = ["Todas"] + extrair_cidades_disponiveis(df_base)
-      if st.session_state["busca_cidade"] not in opcoes_cidade:
-        st.session_state["busca_cidade"] = "Todas"
-      cidade_selecionada = st.selectbox(
-          "📍 Cidade / Comarca:", key="busca_cidade", options=opcoes_cidade
-      )
-    with col_ordem:
-      ordenacao = st.selectbox(
-          "🔃 Ordenar por:",
-          key="ordenacao_lista",
-          options=["Padrão da planilha", "Órgão (A–Z)", "Órgão (Z–A)"],
-      )
+    with col_limpar:
+      st.write("")
+      st.write("")
+      st.button("🧹 Limpar", on_click=limpar_busca_callback)
 
-    st.button("🧹 Limpar filtros", on_click=limpar_filtros_callback)
-
-    df_filtrado = df_base.copy()
-    if cidade_selecionada != "Todas":
-      df_filtrado = df_filtrado[
-          df_filtrado.apply(
-              lambda row: corresponde_busca(row, cidade_selecionada), axis=1
-          )
-      ]
     if termo:
-      mask = df_filtrado.apply(
-          lambda row: corresponde_busca(row, termo), axis=1
-      )
-      df_filtrado = df_filtrado[mask]
-
-    if ordenacao == "Órgão (A–Z)":
-      df_filtrado = df_filtrado.sort_values(
-          by="Órgão / Instituição",
-          key=lambda s: s.apply(normalizar_busca),
-          ascending=True,
-      )
-    elif ordenacao == "Órgão (Z–A)":
-      df_filtrado = df_filtrado.sort_values(
-          by="Órgão / Instituição",
-          key=lambda s: s.apply(normalizar_busca),
-          ascending=False,
-      )
+      mask = df_base.apply(lambda row: corresponde_busca(row, termo), axis=1)
+      df_filtrado = df_base[mask]
+    else:
+      df_filtrado = df_base
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Registros encontrados", len(df_filtrado))
