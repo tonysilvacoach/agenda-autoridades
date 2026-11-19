@@ -433,4 +433,162 @@ with aba_consulta:
     if termo:
       mask = df_base.apply(lambda row: corresponde_busca(row, termo), axis=1)
       df_filtrado = df_base[mask]
-    else
+    else:
+      df_filtrado = df_base
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Registros encontrados", len(df_filtrado))
+    m2.metric(
+        "Com e-mail",
+        int((df_filtrado["E-mail Institucional"] != "").sum()),
+    )
+    m3.metric(
+        "Com telefone",
+        int((df_filtrado["Telefone / WhatsApp"] != "").sum()),
+    )
+    m4.metric(
+        "Com local/endereço",
+        int((df_filtrado["Endereço / Local"] != "").sum()),
+    )
+
+    st.markdown("---")
+
+    for pos, (_, row) in enumerate(df_filtrado.iterrows()):
+      orgao = limpar_valor(row.get("Órgão / Instituição", ""))
+      cargo = limpar_valor(row.get("Cargo / Função", ""))
+      autoridade = limpar_valor(row.get("Nome da Autoridade", ""))
+      telefone = limpar_valor(row.get("Telefone / WhatsApp", ""))
+      email = limpar_valor(row.get("E-mail Institucional", ""))
+      endereco = limpar_valor(row.get("Endereço / Local", ""))
+      obs = limpar_valor(row.get("Observações", ""))
+      wa_link = montar_link_whatsapp(telefone)
+
+      st.markdown('<div class="contato-card">', unsafe_allow_html=True)
+      st.subheader(f"🏢 {orgao}")
+
+      if cargo and autoridade:
+        st.write(f"**Cargo/Setor:** {cargo} — *{autoridade}*")
+      elif autoridade:
+        st.write(f"**Referência/Autoridade:** *{autoridade}*")
+      elif cargo:
+        st.write(f"**Cargo/Setor:** {cargo}")
+
+      if endereco:
+        st.write(f"📍 **Local:** {endereco}")
+
+      col1, col2 = st.columns(2)
+      with col1:
+        if telefone:
+          if wa_link:
+            st.markdown(
+                f"📞 **Telefone:** {telefone} • [💬 WhatsApp]({wa_link})"
+            )
+          else:
+            st.write(f"📞 **Telefone:** {telefone}")
+      with col2:
+        if email:
+          st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
+
+      if obs:
+        st.info(f"💡 **Observações:** {obs}")
+
+      with st.expander(f"📋 Copiar contato rápido #{pos + 1}"):
+        st.code(formatar_contato_copiar(row), language="text")
+
+      st.markdown("</div>", unsafe_allow_html=True)
+
+with aba_alimentador:
+  st.subheader("⚡ Téo — Triar Lista, Conferir e Gravar na Planilha")
+  st.markdown(
+      "Cole a lista bruta abaixo. O **Téo** limpa asteriscos, junta e-mails"
+      " soltos, separa órgão, cargo/autoridade, local e observações, e monta"
+      " uma tabela editável antes de gravar."
+  )
+
+  texto_entrada = st.text_area("Cole sua lista aqui:", height=200)
+
+  if st.button("🧪 Téo: Preparar e Conferir Lista", type="primary"):
+    if texto_entrada.strip():
+      linhas_preparadas = organizar_e_limpar_lista(texto_entrada)
+      if linhas_preparadas:
+        df_prev = pd.DataFrame(
+            linhas_preparadas,
+            columns=["Gravar?"] + COLUNAS_OFICIAIS,
+        )
+        st.session_state["teo_previa_df"] = df_prev
+      else:
+        st.warning("Não foi possível identificar registros válidos na lista.")
+    else:
+      st.warning("Cole uma lista antes de clicar no botão.")
+
+  if "teo_previa_df" in st.session_state and not st.session_state[
+      "teo_previa_df"
+  ].empty:
+    duplicados = verificar_duplicados(st.session_state["teo_previa_df"], df_base)
+    if duplicados:
+      st.warning(
+          "⚠️ Possíveis registros já existentes na planilha: "
+          + "; ".join(duplicados)
+      )
+
+    st.markdown(
+        "**Pré-visualização editável** (você pode ajustar qualquer campo ou"
+        " desmarcar `Gravar?` antes de salvar):"
+    )
+    df_editado = st.data_editor(
+        st.session_state["teo_previa_df"],
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="editor_previa_teo",
+    )
+
+    if st.button("✅ Confirmar e Gravar Linhas Marcadas na Planilha"):
+      with st.spinner("Gravando registros selecionados no Google Sheets..."):
+        try:
+          linhas_para_gravar = []
+          for _, r in df_editado.iterrows():
+            if bool(r.get("Gravar?", True)):
+              linha_vals = [
+                  limpar_valor(r.get(c, "")) for c in COLUNAS_OFICIAIS
+              ]
+              if any(linha_vals):
+                linhas_para_gravar.append(linha_vals)
+
+          if not linhas_para_gravar:
+            st.warning("Nenhuma linha marcada para gravação.")
+          else:
+            aba_sheet = conectar_planilha()
+            aba_sheet.append_rows(
+                linhas_para_gravar, value_input_option="USER_ENTERED"
+            )
+            st.cache_data.clear()
+            del st.session_state["teo_previa_df"]
+            st.success(
+                f"✅ Pronto! {len(linhas_para_gravar)} registro(s) gravado(s)"
+                " diretamente na planilha!"
+            )
+            st.rerun()
+        except Exception as e:
+          st.error(f"Erro ao gravar na planilha: {type(e).__name__}: {e}")
+          st.code(traceback.format_exc(), language="text")
+
+with aba_editar:
+  st.subheader("✏️ Editar Registro Existente na Planilha")
+  if df_base.empty:
+    st.info("Nenhum registro disponível para edição.")
+  else:
+    opcoes_reg = {
+        f"Linha {int(r['_linha_sheet'])} — {r['Órgão / Instituição']}"
+        + (f" ({r['E-mail Institucional']})" if r["E-mail Institucional"] else ""): int(
+            r["_linha_sheet"]
+        )
+        for _, r in df_base.iterrows()
+    }
+    escolha_label = st.selectbox(
+        "Selecione o registro para editar:", list(opcoes_reg.keys())
+    )
+    linha_alvo = opcoes_reg[escolha_label]
+    registro_atual = df_base[df_base["_linha_sheet"] == linha_alvo].iloc[0]
+
+    with st.form("form
