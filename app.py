@@ -36,13 +36,6 @@ st.markdown(
         color: #cbd5e1;
         font-size: 0.95rem;
     }
-    .contato-card {
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 14px 18px;
-        margin-bottom: 10px;
-    }
     .teo-footer {
         margin-top: 28px;
         padding-top: 14px;
@@ -81,6 +74,44 @@ COLUNAS_OFICIAIS = [
     "Endereço / Local",
     "Observações",
 ]
+
+
+def obter_pin_admin() -> str:
+  try:
+    if "admin_pin" in st.secrets:
+      return str(st.secrets["admin_pin"]).strip()
+  except Exception:
+    pass
+  return "1234"
+
+
+def verificar_acesso_admin(chave_prefixo: str) -> bool:
+  if st.session_state.get("teo_admin_autenticado", False):
+    col_info, col_sair = st.columns([5, 1])
+    with col_info:
+      st.caption("🔓 Modo administrador ativo nesta sessão.")
+    with col_sair:
+      if st.button("🔒 Bloquear", key=f"btn_sair_{chave_prefixo}"):
+        st.session_state["teo_admin_autenticado"] = False
+        st.rerun()
+    return True
+
+  st.info(
+      "🔒 Área restrita à manutenção da base. A consulta continua livre para"
+      " todos."
+  )
+  pin_digitado = st.text_input(
+      "Digite o PIN de administrador para liberar:",
+      type="password",
+      key=f"input_pin_{chave_prefixo}",
+  )
+  if st.button("🔓 Desbloquear", key=f"btn_entrar_{chave_prefixo}"):
+    if pin_digitado.strip() == obter_pin_admin():
+      st.session_state["teo_admin_autenticado"] = True
+      st.rerun()
+    else:
+      st.error("PIN incorreto.")
+  return False
 
 
 def limpar_valor(val) -> str:
@@ -463,191 +494,196 @@ with aba_consulta:
       obs = limpar_valor(row.get("Observações", ""))
       wa_link = montar_link_whatsapp(telefone)
 
-      st.markdown('<div class="contato-card">', unsafe_allow_html=True)
-      st.subheader(f"🏢 {orgao}")
+      with st.container(border=True):
+        st.subheader(f"🏢 {orgao}")
 
-      if cargo and autoridade:
-        st.write(f"**Cargo/Setor:** {cargo} — *{autoridade}*")
-      elif autoridade:
-        st.write(f"**Referência/Autoridade:** *{autoridade}*")
-      elif cargo:
-        st.write(f"**Cargo/Setor:** {cargo}")
+        if cargo and autoridade:
+          st.write(f"**Cargo/Setor:** {cargo} — *{autoridade}*")
+        elif autoridade:
+          st.write(f"**Referência/Autoridade:** *{autoridade}*")
+        elif cargo:
+          st.write(f"**Cargo/Setor:** {cargo}")
 
-      if endereco:
-        st.write(f"📍 **Local:** {endereco}")
+        if endereco:
+          st.write(f"📍 **Local:** {endereco}")
 
-      col1, col2 = st.columns(2)
-      with col1:
-        if telefone:
-          if wa_link:
-            st.markdown(
-                f"📞 **Telefone:** {telefone} • [💬 WhatsApp]({wa_link})"
-            )
-          else:
-            st.write(f"📞 **Telefone:** {telefone}")
-      with col2:
-        if email:
-          st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
+        col1, col2 = st.columns(2)
+        with col1:
+          if telefone:
+            if wa_link:
+              st.markdown(
+                  f"📞 **Telefone:** {telefone} • [💬 WhatsApp]({wa_link})"
+              )
+            else:
+              st.write(f"📞 **Telefone:** {telefone}")
+        with col2:
+          if email:
+            st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
 
-      if obs:
-        st.info(f"💡 **Observações:** {obs}")
+        if obs:
+          st.info(f"💡 **Observações:** {obs}")
 
-      with st.expander(f"📋 Copiar contato rápido #{pos + 1}"):
-        st.code(formatar_contato_copiar(row), language="text")
-
-      st.markdown("</div>", unsafe_allow_html=True)
+        with st.expander(f"📋 Copiar contato rápido #{pos + 1}"):
+          st.code(formatar_contato_copiar(row), language="text")
 
 with aba_alimentador:
   st.subheader("⚡ Téo — Triar Lista, Conferir e Gravar na Planilha")
-  st.markdown(
-      "Cole a lista bruta abaixo. O **Téo** limpa asteriscos, junta e-mails"
-      " soltos, separa órgão, cargo/autoridade, local e observações, e monta"
-      " uma tabela editável antes de gravar."
-  )
+  if verificar_acesso_admin("alimentador"):
+    st.markdown(
+        "Cole a lista bruta abaixo. O **Téo** limpa asteriscos, junta e-mails"
+        " soltos, separa órgão, cargo/autoridade, local e observações, e monta"
+        " uma tabela editável antes de gravar."
+    )
 
-  texto_entrada = st.text_area("Cole sua lista aqui:", height=200)
+    texto_entrada = st.text_area("Cole sua lista aqui:", height=200)
 
-  if st.button("🧪 Téo: Preparar e Conferir Lista", type="primary"):
-    if texto_entrada.strip():
-      linhas_preparadas = organizar_e_limpar_lista(texto_entrada)
-      if linhas_preparadas:
-        df_prev = pd.DataFrame(
-            linhas_preparadas,
-            columns=["Gravar?"] + COLUNAS_OFICIAIS,
-        )
-        st.session_state["teo_previa_df"] = df_prev
+    if st.button("🧪 Téo: Preparar e Conferir Lista", type="primary"):
+      if texto_entrada.strip():
+        linhas_preparadas = organizar_e_limpar_lista(texto_entrada)
+        if linhas_preparadas:
+          df_prev = pd.DataFrame(
+              linhas_preparadas,
+              columns=["Gravar?"] + COLUNAS_OFICIAIS,
+          )
+          st.session_state["teo_previa_df"] = df_prev
+        else:
+          st.warning("Não foi possível identificar registros válidos na lista.")
       else:
-        st.warning("Não foi possível identificar registros válidos na lista.")
-    else:
-      st.warning("Cole uma lista antes de clicar no botão.")
+        st.warning("Cole uma lista antes de clicar no botão.")
 
-  if "teo_previa_df" in st.session_state and not st.session_state[
-      "teo_previa_df"
-  ].empty:
-    duplicados = verificar_duplicados(st.session_state["teo_previa_df"], df_base)
-    if duplicados:
-      st.warning(
-          "⚠️ Possíveis registros já existentes na planilha: "
-          + "; ".join(duplicados)
+    if "teo_previa_df" in st.session_state and not st.session_state[
+        "teo_previa_df"
+    ].empty:
+      duplicados = verificar_duplicados(
+          st.session_state["teo_previa_df"], df_base
+      )
+      if duplicados:
+        st.warning(
+            "⚠️ Possíveis registros já existentes na planilha: "
+            + "; ".join(duplicados)
+        )
+
+      st.markdown(
+          "**Pré-visualização editável** (você pode ajustar qualquer campo ou"
+          " desmarcar `Gravar?` antes de salvar):"
+      )
+      df_editado = st.data_editor(
+          st.session_state["teo_previa_df"],
+          use_container_width=True,
+          hide_index=True,
+          num_rows="dynamic",
+          key="editor_previa_teo",
       )
 
-    st.markdown(
-        "**Pré-visualização editável** (você pode ajustar qualquer campo ou"
-        " desmarcar `Gravar?` antes de salvar):"
-    )
-    df_editado = st.data_editor(
-        st.session_state["teo_previa_df"],
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key="editor_previa_teo",
-    )
+      if st.button("✅ Confirmar e Gravar Linhas Marcadas na Planilha"):
+        with st.spinner("Gravando registros selecionados no Google Sheets..."):
+          try:
+            linhas_para_gravar = []
+            for _, r in df_editado.iterrows():
+              if bool(r.get("Gravar?", True)):
+                linha_vals = [
+                    limpar_valor(r.get(c, "")) for c in COLUNAS_OFICIAIS
+                ]
+                if any(linha_vals):
+                  linhas_para_gravar.append(linha_vals)
 
-    if st.button("✅ Confirmar e Gravar Linhas Marcadas na Planilha"):
-      with st.spinner("Gravando registros selecionados no Google Sheets..."):
-        try:
-          linhas_para_gravar = []
-          for _, r in df_editado.iterrows():
-            if bool(r.get("Gravar?", True)):
-              linha_vals = [
-                  limpar_valor(r.get(c, "")) for c in COLUNAS_OFICIAIS
-              ]
-              if any(linha_vals):
-                linhas_para_gravar.append(linha_vals)
-
-          if not linhas_para_gravar:
-            st.warning("Nenhuma linha marcada para gravação.")
-          else:
-            aba_sheet = conectar_planilha()
-            aba_sheet.append_rows(
-                linhas_para_gravar, value_input_option="USER_ENTERED"
-            )
-            st.cache_data.clear()
-            del st.session_state["teo_previa_df"]
-            st.success(
-                f"✅ Pronto! {len(linhas_para_gravar)} registro(s) gravado(s)"
-                " diretamente na planilha!"
-            )
-            st.rerun()
-        except Exception as e:
-          st.error(f"Erro ao gravar na planilha: {type(e).__name__}: {e}")
-          st.code(traceback.format_exc(), language="text")
+            if not linhas_para_gravar:
+              st.warning("Nenhuma linha marcada para gravação.")
+            else:
+              aba_sheet = conectar_planilha()
+              aba_sheet.append_rows(
+                  linhas_para_gravar, value_input_option="USER_ENTERED"
+              )
+              st.cache_data.clear()
+              del st.session_state["teo_previa_df"]
+              st.success(
+                  f"✅ Pronto! {len(linhas_para_gravar)} registro(s) gravado(s)"
+                  " diretamente na planilha!"
+              )
+              st.rerun()
+          except Exception as e:
+            st.error(f"Erro ao gravar na planilha: {type(e).__name__}: {e}")
+            st.code(traceback.format_exc(), language="text")
 
 with aba_editar:
   st.subheader("✏️ Editar Registro Existente na Planilha")
-  if df_base.empty:
-    st.info("Nenhum registro disponível para edição.")
-  else:
-    opcoes_reg = {
-        f"Linha {int(r['_linha_sheet'])} — {r['Órgão / Instituição']}"
-        + (f" ({r['E-mail Institucional']})" if r["E-mail Institucional"] else ""): int(
-            r["_linha_sheet"]
-        )
-        for _, r in df_base.iterrows()
-    }
-    escolha_label = st.selectbox(
-        "Selecione o registro para editar:", list(opcoes_reg.keys())
-    )
-    linha_alvo = opcoes_reg[escolha_label]
-    registro_atual = df_base[df_base["_linha_sheet"] == linha_alvo].iloc[0]
-
-    with st.form("form_editar_registro"):
-      novo_orgao = st.text_input(
-          "Órgão / Instituição", value=registro_atual["Órgão / Instituição"]
+  if verificar_acesso_admin("editar"):
+    if df_base.empty:
+      st.info("Nenhum registro disponível para edição.")
+    else:
+      opcoes_reg = {
+          f"Linha {int(r['_linha_sheet'])} — {r['Órgão / Instituição']}"
+          + (
+              f" ({r['E-mail Institucional']})"
+              if r["E-mail Institucional"]
+              else ""
+          ): int(r["_linha_sheet"])
+          for _, r in df_base.iterrows()
+      }
+      escolha_label = st.selectbox(
+          "Selecione o registro para editar:", list(opcoes_reg.keys())
       )
-      col_e1, col_e2 = st.columns(2)
-      with col_e1:
-        novo_cargo = st.text_input(
-            "Cargo / Função", value=registro_atual["Cargo / Função"]
-        )
-        novo_tel = st.text_input(
-            "Telefone / WhatsApp", value=registro_atual["Telefone / WhatsApp"]
-        )
-      with col_e2:
-        novo_aut = st.text_input(
-            "Nome da Autoridade", value=registro_atual["Nome da Autoridade"]
-        )
-        novo_mail = st.text_input(
-            "E-mail Institucional", value=registro_atual["E-mail Institucional"]
-        )
+      linha_alvo = opcoes_reg[escolha_label]
+      registro_atual = df_base[df_base["_linha_sheet"] == linha_alvo].iloc[0]
 
-      novo_end = st.text_input(
-          "Endereço / Local", value=registro_atual["Endereço / Local"]
-      )
-      nova_obs = st.text_area(
-          "Observações", value=registro_atual["Observações"], height=80
-      )
-
-      salvar_edicao = st.form_submit_button(
-          "💾 Salvar Alterações na Planilha", type="primary"
-      )
-
-    if salvar_edicao:
-      with st.spinner("Atualizando linha no Google Sheets..."):
-        try:
-          aba_sheet = conectar_planilha()
-          valores_atualizados = [
-              novo_orgao.strip(),
-              novo_cargo.strip(),
-              novo_aut.strip(),
-              novo_tel.strip(),
-              novo_mail.strip(),
-              novo_end.strip(),
-              nova_obs.strip(),
-          ]
-          aba_sheet.update(
-              f"A{linha_alvo}:G{linha_alvo}",
-              [valores_atualizados],
-              value_input_option="USER_ENTERED",
+      with st.form("form_editar_registro"):
+        novo_orgao = st.text_input(
+            "Órgão / Instituição", value=registro_atual["Órgão / Instituição"]
+        )
+        col_e1, col_e2 = st.columns(2)
+        with col_e1:
+          novo_cargo = st.text_input(
+              "Cargo / Função", value=registro_atual["Cargo / Função"]
           )
-          st.cache_data.clear()
-          st.success(
-              f"✅ Registro da linha {linha_alvo} atualizado com sucesso!"
+          novo_tel = st.text_input(
+              "Telefone / WhatsApp", value=registro_atual["Telefone / WhatsApp"]
           )
-          st.rerun()
-        except Exception as e:
-          st.error(f"Erro ao atualizar registro: {type(e).__name__}: {e}")
-          st.code(traceback.format_exc(), language="text")
+        with col_e2:
+          novo_aut = st.text_input(
+              "Nome da Autoridade", value=registro_atual["Nome da Autoridade"]
+          )
+          novo_mail = st.text_input(
+              "E-mail Institucional",
+              value=registro_atual["E-mail Institucional"],
+          )
+
+        novo_end = st.text_input(
+            "Endereço / Local", value=registro_atual["Endereço / Local"]
+        )
+        nova_obs = st.text_area(
+            "Observações", value=registro_atual["Observações"], height=80
+        )
+
+        salvar_edicao = st.form_submit_button(
+            "💾 Salvar Alterações na Planilha", type="primary"
+        )
+
+      if salvar_edicao:
+        with st.spinner("Atualizando linha no Google Sheets..."):
+          try:
+            aba_sheet = conectar_planilha()
+            valores_atualizados = [
+                novo_orgao.strip(),
+                novo_cargo.strip(),
+                novo_aut.strip(),
+                novo_tel.strip(),
+                novo_mail.strip(),
+                novo_end.strip(),
+                nova_obs.strip(),
+            ]
+            aba_sheet.update(
+                f"A{linha_alvo}:G{linha_alvo}",
+                [valores_atualizados],
+                value_input_option="USER_ENTERED",
+            )
+            st.cache_data.clear()
+            st.success(
+                f"✅ Registro da linha {linha_alvo} atualizado com sucesso!"
+            )
+            st.rerun()
+          except Exception as e:
+            st.error(f"Erro ao atualizar registro: {type(e).__name__}: {e}")
+            st.code(traceback.format_exc(), language="text")
 
 st.markdown(
     """
