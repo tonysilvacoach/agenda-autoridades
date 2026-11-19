@@ -12,16 +12,55 @@ st.set_page_config(
     page_icon="🤖",
     layout="wide",
 )
-st.title("🤖 Téo — Triagem e Endereços Oficiais")
-st.caption(
-    "Agente de IA • Triagem e Endereços Oficiais (Órgãos, Autoridades e"
-    " Contatos)"
+
+st.markdown(
+    """
+    <style>
+    .teo-banner {
+        background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+        color: #f8fafc;
+        padding: 18px 22px;
+        border-radius: 12px;
+        border-left: 6px solid #38bdf8;
+        margin-bottom: 14px;
+    }
+    .teo-banner h2 {
+        margin: 0 0 4px 0;
+        color: #ffffff;
+        font-size: 1.55rem;
+    }
+    .teo-banner p {
+        margin: 0;
+        color: #cbd5e1;
+        font-size: 0.95rem;
+    }
+    .contato-card {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-bottom: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="teo-banner">
+        <h2>🤖 Téo — Triagem e Endereços Oficiais</h2>
+        <p>Agente de IA do departamento de contatos, órgãos, autoridades e endereços • Consulta rápida, triagem inteligente e edição direta</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 SHEET_ID = "1PWxjWALBtB_SNNHIwPErRu5mVn5PEkZv3B8MEP79Hfg"
 SHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 )
+HEADER_ROW_INDEX = 5  # Linha 5 na planilha (equivalente a skiprows=4 no CSV)
 
 COLUNAS_OFICIAIS = [
     "Órgão / Instituição",
@@ -32,6 +71,13 @@ COLUNAS_OFICIAIS = [
     "Endereço / Local",
     "Observações",
 ]
+
+
+def limpar_valor(val) -> str:
+  if val is None or pd.isna(val):
+    return ""
+  s = str(val).strip()
+  return "" if s.lower() == "nan" else s
 
 
 def normalizar_busca(texto: str) -> str:
@@ -64,7 +110,7 @@ def corresponde_busca(row_series: pd.Series, termo: str) -> bool:
     return True
 
   texto_linha = " ".join(
-      str(v) for v in row_series.values if pd.notna(v) and str(v) != "nan"
+      limpar_valor(v) for v in row_series.values if limpar_valor(v)
   )
   alvo_norm = normalizar_busca(texto_linha)
   if termo_norm in alvo_norm:
@@ -95,13 +141,12 @@ def extrair_cidades_disponiveis(df: pd.DataFrame) -> list:
   encontradas = set()
   for _, row in df.iterrows():
     texto = " ".join(
-        str(v) for v in row.values if pd.notna(v) and str(v) != "nan"
+        limpar_valor(v) for v in row.values if limpar_valor(v)
     )
     texto_norm = normalizar_busca(texto)
     for cid in cidades_conhecidas:
       if normalizar_busca(cid) in texto_norm:
         encontradas.add(cid)
-    # Captura padrões tipo "Cidade/UF" ou "Cidade - UF"
     for m in re.finditer(
         r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+){0,2})\s*[/\-]\s*(?:GO|MG|DF|BA|TO|MT|MS|SP|RJ)\b",
         texto,
@@ -112,29 +157,43 @@ def extrair_cidades_disponiveis(df: pd.DataFrame) -> list:
   return sorted(encontradas)
 
 
+def montar_link_whatsapp(telefone_texto: str) -> str:
+  if not telefone_texto:
+    return ""
+  digitos = re.sub(r"\D", "", telefone_texto.split("/")[0])
+  if len(digitos) in (10, 11):
+    return f"https://wa.me/55{digitos}"
+  if len(digitos) in (12, 13) and digitos.startswith("55"):
+    return f"https://wa.me/{digitos}"
+  return ""
+
+
 def formatar_contato_copiar(row: pd.Series) -> str:
-  orgao = str(row.get("Órgão / Instituição", ""))
-  cargo = str(row.get("Cargo / Função", ""))
-  autoridade = str(row.get("Nome da Autoridade", ""))
-  telefone = str(row.get("Telefone / WhatsApp", ""))
-  email = str(row.get("E-mail Institucional", ""))
-  endereco = str(row.get("Endereço / Local", ""))
+  orgao = limpar_valor(row.get("Órgão / Instituição", ""))
+  cargo = limpar_valor(row.get("Cargo / Função", ""))
+  autoridade = limpar_valor(row.get("Nome da Autoridade", ""))
+  telefone = limpar_valor(row.get("Telefone / WhatsApp", ""))
+  email = limpar_valor(row.get("E-mail Institucional", ""))
+  endereco = limpar_valor(row.get("Endereço / Local", ""))
+  obs = limpar_valor(row.get("Observações", ""))
 
   partes = []
-  if orgao and orgao != "nan":
+  if orgao:
     partes.append(orgao)
-  if cargo and cargo != "nan" and autoridade and autoridade != "nan":
+  if cargo and autoridade:
     partes.append(f"{cargo}: {autoridade}")
-  elif autoridade and autoridade != "nan":
+  elif autoridade:
     partes.append(autoridade)
-  elif cargo and cargo != "nan":
+  elif cargo:
     partes.append(cargo)
-  if telefone and telefone != "nan":
+  if telefone:
     partes.append(f"Tel: {telefone}")
-  if email and email != "nan":
+  if email:
     partes.append(f"E-mail: {email}")
-  if endereco and endereco != "nan":
+  if endereco:
     partes.append(f"Local: {endereco}")
+  if obs:
+    partes.append(f"Obs: {obs}")
   return " | ".join(partes)
 
 
@@ -161,7 +220,13 @@ def conectar_planilha():
 def carregar_dados():
   try:
     df = pd.read_csv(SHEET_URL, skiprows=4)
-    df = df.dropna(subset=["Órgão / Instituição"])
+    # Preserva o número exato da linha no Google Sheets (linha 6 é índice 0 após skiprows=4)
+    df["_linha_sheet"] = df.index + HEADER_ROW_INDEX + 1
+    df = df.dropna(subset=["Órgão / Instituição"]).copy()
+    for col in COLUNAS_OFICIAIS:
+      if col not in df.columns:
+        df[col] = ""
+      df[col] = df[col].apply(limpar_valor)
     return df
   except Exception as e:
     st.error(f"Erro ao carregar dados: {e}")
@@ -193,7 +258,9 @@ def extrair_cargo_e_autoridade(trecho: str) -> tuple[str, str]:
   return "", texto
 
 
-def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
+def separar_local_e_orgao(
+    texto_sem_contatos: str,
+) -> tuple[str, str, str, str, str]:
   limpa = re.sub(
       r"\b(e-?mail|contato|telefone|tel|ramal\s*n[º°o.]*\s*\d*)\s*:?",
       "",
@@ -202,16 +269,17 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
   )
   limpa = limpa.replace("*", " ")
 
-  obs_parenteses = ""
-  m_obs = re.search(
-      r"\(([^)]*(?:enviar|ofício|oficio|agênc|agenc|nº|no)[^)]*)\)",
-      limpa,
-      re.IGNORECASE,
-  )
-  if m_obs:
-    obs_parenteses = m_obs.group(1).strip()
-    limpa = (limpa[: m_obs.start()] + " " + limpa[m_obs.end() :]).strip()
+  observacoes = []
+  for m_obs in re.finditer(r"\(([^)]+)\)", limpa):
+    conteudo_par = m_obs.group(1).strip()
+    if re.search(
+        r"(enviar|ofício|oficio|agênc|agenc|nº|no\b|assunto|e-?mail|ramal|whatsapp|plantão|plantao)",
+        conteudo_par,
+        re.IGNORECASE,
+    ):
+      observacoes.append(conteudo_par)
 
+  limpa = re.sub(r"\([^)]*\)", " ", limpa)
   limpa = re.sub(r"\s{2,}", " ", limpa).strip(" -–—|;,")
 
   partes = [
@@ -276,14 +344,8 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
       autoridade = a_base
 
   endereco_final = " | ".join(dict.fromkeys(locais))
-  if obs_parenteses:
-    endereco_final = (
-        f"{endereco_final} ({obs_parenteses})".strip()
-        if endereco_final
-        else f"({obs_parenteses})"
-    )
-
-  return orgao_base, cargo, autoridade, endereco_final
+  obs_final = " | ".join(dict.fromkeys(observacoes))
+  return orgao_base, cargo, autoridade, endereco_final, obs_final
 
 
 def organizar_e_limpar_lista(texto_bruto: str) -> list:
@@ -319,38 +381,98 @@ def organizar_e_limpar_lista(texto_bruto: str) -> list:
     tel_str = " / ".join(dict.fromkeys([t.strip() for t in telefones]))
     sem_tel = regex_telefone.sub("", sem_email)
 
-    orgao, cargo, autoridade, endereco = separar_local_e_orgao(sem_tel)
+    orgao, cargo, autoridade, endereco, obs = separar_local_e_orgao(sem_tel)
 
     if orgao or email_str or tel_str:
-      novas_linhas.append(
-          [orgao, cargo, autoridade, tel_str, email_str, endereco, ""]
-      )
+      novas_linhas.append([
+          True,
+          orgao,
+          cargo,
+          autoridade,
+          tel_str,
+          email_str,
+          endereco,
+          obs,
+      ])
 
   return novas_linhas
 
 
-aba_consulta, aba_alimentador = st.tabs([
+def verificar_duplicados(
+    linhas_df: pd.DataFrame, df_existente: pd.DataFrame
+) -> list:
+  if df_existente.empty or linhas_df.empty:
+    return []
+  duplicados = []
+  for idx, r in linhas_df.iterrows():
+    org_n = normalizar_busca(r.get("Órgão / Instituição", ""))
+    mail_n = normalizar_busca(r.get("E-mail Institucional", ""))
+    tel_n = re.sub(r"\D", "", str(r.get("Telefone / WhatsApp", "")))
+
+    for _, ex in df_existente.iterrows():
+      org_ex = normalizar_busca(ex.get("Órgão / Instituição", ""))
+      mail_ex = normalizar_busca(ex.get("E-mail Institucional", ""))
+      tel_ex = re.sub(r"\D", "", str(ex.get("Telefone / WhatsApp", "")))
+
+      mesmo_org = bool(org_n and org_ex and org_n == org_ex)
+      mesmo_mail = bool(mail_n and mail_ex and mail_n in mail_ex)
+      mesmo_tel = bool(tel_n and tel_ex and len(tel_n) >= 8 and tel_n in tel_ex)
+
+      if (mesmo_org and (mesmo_mail or mesmo_tel)) or (mesmo_mail and mesmo_tel):
+        duplicados.append(
+            f"Linha {idx + 1}: {r.get('Órgão / Instituição', '')}"
+        )
+        break
+  return duplicados
+
+
+def limpar_filtros_callback():
+  st.session_state["busca_termo"] = ""
+  st.session_state["busca_cidade"] = "Todas"
+  st.session_state["ordenacao_lista"] = "Padrão da planilha"
+
+
+df_base = carregar_dados()
+
+aba_consulta, aba_alimentador, aba_editar = st.tabs([
     "🔍 Triagem e Consulta Rápida",
     "⚡ Téo — Alimentador de Endereços e Contatos",
+    "✏️ Editar Registro",
 ])
 
 with aba_consulta:
-  df = carregar_dados()
-  if not df.empty:
-    col_busca, col_cidade = st.columns([3, 1])
+  if not df_base.empty:
+    if "busca_termo" not in st.session_state:
+      st.session_state["busca_termo"] = ""
+    if "busca_cidade" not in st.session_state:
+      st.session_state["busca_cidade"] = "Todas"
+    if "ordenacao_lista" not in st.session_state:
+      st.session_state["ordenacao_lista"] = "Padrão da planilha"
+
+    col_busca, col_cidade, col_ordem = st.columns([3, 1.3, 1.3])
     with col_busca:
       termo = st.text_input(
           "🔍 Pesquisar Órgão, Autoridade, Cargo ou Local:",
-          "",
+          key="busca_termo",
           placeholder="Ex: forum, 3a vara, luziania, delegacia...",
       )
     with col_cidade:
-      opcoes_cidade = ["Todas"] + extrair_cidades_disponiveis(df)
+      opcoes_cidade = ["Todas"] + extrair_cidades_disponiveis(df_base)
+      if st.session_state["busca_cidade"] not in opcoes_cidade:
+        st.session_state["busca_cidade"] = "Todas"
       cidade_selecionada = st.selectbox(
-          "📍 Cidade / Comarca:", opcoes_cidade, index=0
+          "📍 Cidade / Comarca:", key="busca_cidade", options=opcoes_cidade
+      )
+    with col_ordem:
+      ordenacao = st.selectbox(
+          "🔃 Ordenar por:",
+          key="ordenacao_lista",
+          options=["Padrão da planilha", "Órgão (A–Z)", "Órgão (Z–A)"],
       )
 
-    df_filtrado = df.copy()
+    st.button("🧹 Limpar filtros", on_click=limpar_filtros_callback)
+
+    df_filtrado = df_base.copy()
     if cidade_selecionada != "Todas":
       df_filtrado = df_filtrado[
           df_filtrado.apply(
@@ -363,76 +485,228 @@ with aba_consulta:
       )
       df_filtrado = df_filtrado[mask]
 
-    st.markdown(f"**Total de registros:** {len(df_filtrado)}")
+    if ordenacao == "Órgão (A–Z)":
+      df_filtrado = df_filtrado.sort_values(
+          by="Órgão / Instituição",
+          key=lambda s: s.apply(normalizar_busca),
+          ascending=True,
+      )
+    elif ordenacao == "Órgão (Z–A)":
+      df_filtrado = df_filtrado.sort_values(
+          by="Órgão / Instituição",
+          key=lambda s: s.apply(normalizar_busca),
+          ascending=False,
+      )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Registros encontrados", len(df_filtrado))
+    m2.metric(
+        "Com e-mail",
+        int((df_filtrado["E-mail Institucional"] != "").sum()),
+    )
+    m3.metric(
+        "Com telefone",
+        int((df_filtrado["Telefone / WhatsApp"] != "").sum()),
+    )
+    m4.metric(
+        "Com local/endereço",
+        int((df_filtrado["Endereço / Local"] != "").sum()),
+    )
+
     st.markdown("---")
-    for idx, row in df_filtrado.iterrows():
-      orgao = str(row.get("Órgão / Instituição", ""))
-      cargo = str(row.get("Cargo / Função", ""))
-      autoridade = str(row.get("Nome da Autoridade", ""))
-      telefone = str(row.get("Telefone / WhatsApp", ""))
-      email = str(row.get("E-mail Institucional", ""))
-      endereco = str(row.get("Endereço / Local", ""))
-      obs = str(row.get("Observações", ""))
 
-      with st.container():
-        st.subheader(f"🏢 {orgao}")
-        if cargo != "nan" and cargo:
-          st.write(
-              f"**Cargo/Setor:** {cargo}"
-              + (
-                  f" — *{autoridade}*"
-                  if autoridade != "nan" and autoridade
-                  else ""
-              )
-          )
-        elif autoridade != "nan" and autoridade:
-          st.write(f"**Referência/Autoridade:** *{autoridade}*")
-        if endereco != "nan" and endereco:
-          st.write(f"📍 **Local:** {endereco}")
-        col1, col2 = st.columns(2)
-        with col1:
-          if telefone != "nan" and telefone:
+    for pos, (_, row) in enumerate(df_filtrado.iterrows()):
+      orgao = limpar_valor(row.get("Órgão / Instituição", ""))
+      cargo = limpar_valor(row.get("Cargo / Função", ""))
+      autoridade = limpar_valor(row.get("Nome da Autoridade", ""))
+      telefone = limpar_valor(row.get("Telefone / WhatsApp", ""))
+      email = limpar_valor(row.get("E-mail Institucional", ""))
+      endereco = limpar_valor(row.get("Endereço / Local", ""))
+      obs = limpar_valor(row.get("Observações", ""))
+      wa_link = montar_link_whatsapp(telefone)
+
+      st.markdown('<div class="contato-card">', unsafe_allow_html=True)
+      st.subheader(f"🏢 {orgao}")
+
+      if cargo and autoridade:
+        st.write(f"**Cargo/Setor:** {cargo} — *{autoridade}*")
+      elif autoridade:
+        st.write(f"**Referência/Autoridade:** *{autoridade}*")
+      elif cargo:
+        st.write(f"**Cargo/Setor:** {cargo}")
+
+      if endereco:
+        st.write(f"📍 **Local:** {endereco}")
+
+      col1, col2 = st.columns(2)
+      with col1:
+        if telefone:
+          if wa_link:
+            st.markdown(
+                f"📞 **Telefone:** {telefone} • [💬 WhatsApp]({wa_link})"
+            )
+          else:
             st.write(f"📞 **Telefone:** {telefone}")
-        with col2:
-          if email != "nan" and email:
-            st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
-        if obs != "nan" and obs:
-          st.info(f"💡 **Observações:** {obs}")
+      with col2:
+        if email:
+          st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
 
-        with st.expander(f"📋 Copiar contato rápido #{idx + 1}"):
-          st.code(formatar_contato_copiar(row), language="text")
-        st.markdown("---")
+      if obs:
+        st.info(f"💡 **Observações:** {obs}")
+
+      with st.expander(f"📋 Copiar contato rápido #{pos + 1}"):
+        st.code(formatar_contato_copiar(row), language="text")
+
+      st.markdown("</div>", unsafe_allow_html=True)
 
 with aba_alimentador:
-  st.subheader("⚡ Téo — Triar Lista e Gravar Direto na Planilha")
+  st.subheader("⚡ Téo — Triar Lista, Conferir e Gravar na Planilha")
   st.markdown(
       "Cole a lista bruta abaixo. O **Téo** limpa asteriscos, junta e-mails"
-      " soltos, separa órgão, cargo/autoridade e endereço oficial, e salva"
-      " direto no Google Sheets."
+      " soltos, separa órgão, cargo/autoridade, local e observações, e monta"
+      " uma tabela editável antes de gravar."
   )
 
-  texto_entrada = st.text_area("Cole sua lista aqui:", height=220)
+  texto_entrada = st.text_area("Cole sua lista aqui:", height=200)
 
-  if st.button("🚀 Téo: Organizar e Gravar na Planilha", type="primary"):
+  if st.button("🧪 Téo: Preparar e Conferir Lista", type="primary"):
     if texto_entrada.strip():
-      with st.spinner("Téo organizando e salvando na planilha..."):
+      linhas_preparadas = organizar_e_limpar_lista(texto_entrada)
+      if linhas_preparadas:
+        df_prev = pd.DataFrame(
+            linhas_preparadas,
+            columns=["Gravar?"] + COLUNAS_OFICIAIS,
+        )
+        st.session_state["teo_previa_df"] = df_prev
+      else:
+        st.warning("Não foi possível identificar registros válidos na lista.")
+    else:
+      st.warning("Cole uma lista antes de clicar no botão.")
+
+  if "teo_previa_df" in st.session_state and not st.session_state[
+      "teo_previa_df"
+  ].empty:
+    duplicados = verificar_duplicados(st.session_state["teo_previa_df"], df_base)
+    if duplicados:
+      st.warning(
+          "⚠️ Possíveis registros já existentes na planilha: "
+          + "; ".join(duplicados)
+      )
+
+    st.markdown(
+        "**Pré-visualização editável** (você pode ajustar qualquer campo ou"
+        " desmarcar `Gravar?` antes de salvar):"
+    )
+    df_editado = st.data_editor(
+        st.session_state["teo_previa_df"],
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="editor_previa_teo",
+    )
+
+    if st.button("✅ Confirmar e Gravar Linhas Marcadas na Planilha"):
+      with st.spinner("Gravando registros selecionados no Google Sheets..."):
         try:
-          linhas_prontas = organizar_e_limpar_lista(texto_entrada)
-          aba_sheet = conectar_planilha()
-          aba_sheet.append_rows(
-              linhas_prontas, value_input_option="USER_ENTERED"
-          )
-          st.cache_data.clear()
-          st.success(
-              f"✅ Pronto! O Téo organizou e gravou {len(linhas_prontas)}"
-              " contato(s) diretamente na planilha!"
-          )
-          st.dataframe(
-              pd.DataFrame(linhas_prontas, columns=COLUNAS_OFICIAIS),
-              use_container_width=True,
-          )
+          linhas_para_gravar = []
+          for _, r in df_editado.iterrows():
+            if bool(r.get("Gravar?", True)):
+              linha_vals = [
+                  limpar_valor(r.get(c, "")) for c in COLUNAS_OFICIAIS
+              ]
+              if any(linha_vals):
+                linhas_para_gravar.append(linha_vals)
+
+          if not linhas_para_gravar:
+            st.warning("Nenhuma linha marcada para gravação.")
+          else:
+            aba_sheet = conectar_planilha()
+            aba_sheet.append_rows(
+                linhas_para_gravar, value_input_option="USER_ENTERED"
+            )
+            st.cache_data.clear()
+            del st.session_state["teo_previa_df"]
+            st.success(
+                f"✅ Pronto! {len(linhas_para_gravar)} registro(s) gravado(s)"
+                " diretamente na planilha!"
+            )
+            st.rerun()
         except Exception as e:
           st.error(f"Erro ao gravar na planilha: {type(e).__name__}: {e}")
           st.code(traceback.format_exc(), language="text")
-    else:
-      st.warning("Cole uma lista antes de clicar no botão.")
+
+with aba_editar:
+  st.subheader("✏️ Editar Registro Existente na Planilha")
+  if df_base.empty:
+    st.info("Nenhum registro disponível para edição.")
+  else:
+    opcoes_reg = {
+        f"Linha {int(r['_linha_sheet'])} — {r['Órgão / Instituição']}"
+        + (f" ({r['E-mail Institucional']})" if r["E-mail Institucional"] else ""): int(
+            r["_linha_sheet"]
+        )
+        for _, r in df_base.iterrows()
+    }
+    escolha_label = st.selectbox(
+        "Selecione o registro para editar:", list(opcoes_reg.keys())
+    )
+    linha_alvo = opcoes_reg[escolha_label]
+    registro_atual = df_base[df_base["_linha_sheet"] == linha_alvo].iloc[0]
+
+    with st.form("form_editar_registro"):
+      novo_orgao = st.text_input(
+          "Órgão / Instituição", value=registro_atual["Órgão / Instituição"]
+      )
+      col_e1, col_e2 = st.columns(2)
+      with col_e1:
+        novo_cargo = st.text_input(
+            "Cargo / Função", value=registro_atual["Cargo / Função"]
+        )
+        novo_tel = st.text_input(
+            "Telefone / WhatsApp", value=registro_atual["Telefone / WhatsApp"]
+        )
+      with col_e2:
+        novo_aut = st.text_input(
+            "Nome da Autoridade", value=registro_atual["Nome da Autoridade"]
+        )
+        novo_mail = st.text_input(
+            "E-mail Institucional", value=registro_atual["E-mail Institucional"]
+        )
+
+      novo_end = st.text_input(
+          "Endereço / Local", value=registro_atual["Endereço / Local"]
+      )
+      nova_obs = st.text_area(
+          "Observações", value=registro_atual["Observações"], height=80
+      )
+
+      salvar_edicao = st.form_submit_button(
+          "💾 Salvar Alterações na Planilha", type="primary"
+      )
+
+    if salvar_edicao:
+      with st.spinner("Atualizando linha no Google Sheets..."):
+        try:
+          aba_sheet = conectar_planilha()
+          valores_atualizados = [
+              novo_orgao.strip(),
+              novo_cargo.strip(),
+              novo_aut.strip(),
+              novo_tel.strip(),
+              novo_mail.strip(),
+              novo_end.strip(),
+              nova_obs.strip(),
+          ]
+          aba_sheet.update(
+              f"A{linha_alvo}:G{linha_alvo}",
+              [valores_atualizados],
+              value_input_option="USER_ENTERED",
+          )
+          st.cache_data.clear()
+          st.success(
+              f"✅ Registro da linha {linha_alvo} atualizado com sucesso!"
+          )
+          st.rerun()
+        except Exception as e:
+          st.error(f"Erro ao atualizar registro: {type(e).__name__}: {e}")
+          st.code(traceback.format_exc(), language="text")
