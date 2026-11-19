@@ -1,11 +1,12 @@
+import json
 import re
+import gspread
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(
     page_title="Agenda de Autoridades - Fórum", page_icon="🏛️", layout="wide"
 )
-
 st.title("🏛️ Agenda de Autoridades e Órgãos")
 
 SHEET_ID = "1PWxjWALBtB_SNNHIwPErRu5mVn5PEkZv3B8MEP79Hfg"
@@ -22,79 +23,93 @@ COLUNAS_OFICIAIS = [
 ]
 
 
-@st.cache_data(ttl=15)
+def conectar_planilha():
+  credenciais_dict = json.loads(st.secrets["gcp_json"])
+  gc = gspread.service_account_from_dict(credenciais_dict)
+  planilha = gc.open_by_key(SHEET_ID)
+  return planilha.sheet1
+
+
+@st.cache_data(ttl=10)
 def carregar_dados():
   try:
     df = pd.read_csv(SHEET_URL, skiprows=4)
     df = df.dropna(subset=["Órgão / Instituição"])
     return df
   except Exception as e:
-    st.error(
-        f"Erro ao carregar dados da planilha: {e}. Verifique se a planilha"
-        " está compartilhada como 'Qualquer pessoa com o link' (Leitor)."
-    )
+    st.error(f"Erro ao carregar dados: {e}")
     return pd.DataFrame()
 
 
-def organizar_lista_bruta(texto_bruto: str) -> pd.DataFrame:
-  linhas = [linha.strip() for linha in texto_bruto.splitlines() if linha.strip()]
-  registros = []
+def organizar_e_limpar_lista(texto_bruto: str) -> list:
+  linhas_raw = [l.strip() for l in texto_bruto.splitlines() if l.strip()]
+  linhas_unidas = []
 
   regex_email = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+  for linha in linhas_raw:
+    if (
+        linha.lower().startswith("destinatário:")
+        or linha.lower().startswith("destinatario:")
+        or linha == "*"
+    ):
+      continue
+    so_email = regex_email.sub("", linha).replace("*", "").strip(" -:|")
+    if linhas_unidas and not so_email and regex_email.search(linha):
+      linhas_unidas[-1] += " " + linha
+    else:
+      linhas_unidas.append(linha)
+
   regex_telefone = re.compile(r"(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}")
+  novas_linhas = []
 
-  for linha in linhas:
+  for linha in linhas_unidas:
     emails = regex_email.findall(linha)
-    email_encontrado = ", ".join(emails) if emails else ""
-    linha_sem_email = regex_email.sub("", linha)
+    email_str = ", ".join(dict.fromkeys(emails))
+    sem_email = regex_email.sub("", linha)
 
-    telefones = regex_telefone.findall(linha_sem_email)
-    telefone_encontrado = (
-        " / ".join([t.strip() for t in telefones]) if telefones else ""
+    telefones = regex_telefone.findall(sem_email)
+    tel_str = " / ".join(dict.fromkeys([t.strip() for t in telefones]))
+    sem_tel = regex_telefone.sub("", sem_email)
+
+    limpa = re.sub(
+        r"\b(e-?mail|contato|telefone|tel|ramal\s*n[º°o.]*\s*\d*)\s*:?",
+        "",
+        sem_tel,
+        flags=re.IGNORECASE,
     )
-    linha_limpa = regex_telefone.sub("", linha_sem_email)
+    limpa = limpa.replace("*", " ").strip(" -–—|;,")
+    limpa = re.sub(r"\s{2,}", " ", limpa)
 
     partes = [
-        p.strip(" -|;,")
-        for p in re.split(r"\s+[-–—|;]+\s+", linha_limpa)
-        if p.strip(" -|;,")
+        p.strip(" -–—|;,")
+        for p in re.split(r"\s+[-–—|;]+\s+", limpa)
+        if p.strip(" -–—|;,")
     ]
+    orgao = partes[0] if len(partes) >= 1 else limpa
+    autoridade = partes[1] if len(partes) >= 2 else ""
+    endereco = " | ".join(partes[2:]) if len(partes) >= 3 else ""
 
-    orgao = partes[0] if len(partes) >= 1 else linha_limpa.strip()
-    cargo_ou_nome = partes[1] if len(partes) >= 2 else ""
-    endereco_ou_obs = " | ".join(partes[2:]) if len(partes) >= 3 else ""
+    if orgao or email_str or tel_str:
+      novas_linhas.append(
+          [orgao, "", autoridade, tel_str, email_str, endereco, ""]
+      )
 
-    registros.append({
-        "Órgão / Instituição": orgao,
-        "Cargo / Função": "",
-        "Nome da Autoridade": cargo_ou_nome,
-        "Telefone / WhatsApp": telefone_encontrado,
-        "E-mail Institucional": email_encontrado,
-        "Endereço / Local": endereco_ou_obs,
-        "Observações": f"Importado de lista: {linha}",
-    })
-
-  return pd.DataFrame(registros, columns=COLUNAS_OFICIAIS)
+  return novas_linhas
 
 
 aba_consulta, aba_alimentador = st.tabs(
-    ["🔍 Consulta Rápida", "📥 Alimentador Automático de Lista"]
+    ["🔍 Consulta Rápida", "⚡ Alimentador Automático (Grava Direto)"]
 )
 
 with aba_consulta:
-  st.markdown(
-      "Digite qualquer termo abaixo (nome do órgão, cargo, cidade ou inicial)"
-      " para localizar instantaneamente:"
-  )
   df = carregar_dados()
-
   if not df.empty:
     termo = st.text_input(
         "🔍 Pesquisar Órgão, Autoridade ou Cargo:",
         "",
-        placeholder="Ex: Fórum, Delegacia, Prefeitura, Juiz...",
+        placeholder="Ex: Fórum, Delegacia, Promotoria...",
     )
-
     if termo:
       mask = df.astype(str).apply(
           lambda x: x.str.contains(termo, case=False, na=False)
@@ -103,9 +118,8 @@ with aba_consulta:
     else:
       df_filtrado = df
 
-    st.markdown(f"**Total de registros encontrados:** {len(df_filtrado)}")
+    st.markdown(f"**Total de registros:** {len(df_filtrado)}")
     st.markdown("---")
-
     for _, row in df_filtrado.iterrows():
       orgao = str(row.get("Órgão / Instituição", ""))
       cargo = str(row.get("Cargo / Função", ""))
@@ -128,10 +142,8 @@ with aba_consulta:
           )
         elif autoridade != "nan" and autoridade:
           st.write(f"**Referência/Autoridade:** *{autoridade}*")
-
         if endereco != "nan" and endereco:
           st.write(f"📍 **Local:** {endereco}")
-
         col1, col2 = st.columns(2)
         with col1:
           if telefone != "nan" and telefone:
@@ -139,53 +151,36 @@ with aba_consulta:
         with col2:
           if email != "nan" and email:
             st.markdown(f"✉️ **E-mail:** [{email}](mailto:{email})")
-
         if obs != "nan" and obs:
           st.info(f"💡 **Observações:** {obs}")
         st.markdown("---")
-  else:
-    st.warning("Aguardando dados da planilha...")
 
 with aba_alimentador:
-  st.subheader("📥 Organizador Automático de Listas e Contatos")
+  st.subheader("⚡ Colar Lista e Salvar Automaticamente na Planilha")
   st.markdown(
-      "Cole abaixo uma lista solta ou texto com vários contatos (um por"
-      " linha). O sistema separa automaticamente e-mails, telefones e partes do"
-      " texto para você revisar e levar para a planilha."
+      "Cole a lista bruta abaixo. O sistema limpa asteriscos, junta e-mails"
+      " soltos, organiza as colunas e adiciona direto no Google Sheets."
   )
 
-  texto_entrada = st.text_area(
-      "Cole sua lista aqui:",
-      height=180,
-      placeholder=(
-          "Exemplo:\n"
-          "Promotoria de Justiça - Dr. Carlos Silva - (61) 3631-1234 -"
-          " promotoria@mpgo.mp.br - Centro\n"
-          "Delegacia de Polícia - Bel. Ana Souza - 61 99999-0000 -"
-          " dp@pcgo.gov.br"
-      ),
-  )
+  texto_entrada = st.text_area("Cole sua lista aqui:", height=220)
 
-  if st.button("✨ Organizar Lista Agora"):
+  if st.button("🚀 Organizar e Gravar Direto na Planilha", type="primary"):
     if texto_entrada.strip():
-      df_organizado = organizar_lista_bruta(texto_entrada)
-      st.success(f"{len(df_organizado)} linha(s) organizada(s)!")
-
-      st.markdown("### Revise e ajuste se necessário antes de levar para a planilha:")
-      df_editado = st.data_editor(
-          df_organizado, num_rows="dynamic", use_container_width=True
-      )
-
-      tsv_para_colar = df_editado.to_csv(sep="\t", index=False, header=False)
-      st.markdown("### 📋 Copiar pronto para colar direto no Google Sheets:")
-      st.code(tsv_para_colar, language="text")
-
-      csv_download = df_editado.to_csv(index=False).encode("utf-8-sig")
-      st.download_button(
-          label="⬇️ Baixar em CSV",
-          data=csv_download,
-          file_name="contatos_organizados.csv",
-          mime="text/csv",
-      )
+      with st.spinner("Organizando e salvando na planilha..."):
+        try:
+          linhas_prontas = organizar_e_limpar_lista(texto_entrada)
+          aba_sheet = conectar_planilha()
+          aba_sheet.append_rows(linhas_prontas, value_input_option="USER_ENTERED")
+          st.cache_data.clear()
+          st.success(
+              f"✅ Pronto! {len(linhas_prontas)} contatos foram organizados e"
+              " gravados diretamente na planilha!"
+          )
+          st.dataframe(
+              pd.DataFrame(linhas_prontas, columns=COLUNAS_OFICIAIS),
+              use_container_width=True,
+          )
+        except Exception as e:
+          st.error(f"Erro ao gravar na planilha: {e}")
     else:
-      st.warning("Cole pelo menos uma linha de texto antes de organizar.")
+      st.warning("Cole uma lista antes de clicar no botão.")
