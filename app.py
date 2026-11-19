@@ -45,7 +45,6 @@ def normalizar_busca(texto: str) -> str:
 def token_parecido(termo_tok: str, alvo_norm: str, palavras_alvo: list) -> bool:
   if termo_tok in alvo_norm:
     return True
-  # Tolerância a pequenas distorções/erros de digitação em palavras com 4+ letras
   if len(termo_tok) >= 4:
     for pal in palavras_alvo:
       if abs(len(pal) - len(termo_tok)) <= 2:
@@ -104,6 +103,122 @@ def carregar_dados():
     return pd.DataFrame()
 
 
+def extrair_cargo_e_autoridade(trecho: str) -> tuple[str, str]:
+  """Separa cargo/título e nome de autoridade quando possível."""
+  texto = trecho.strip(" -–—|;,")
+  if not texto:
+    return "", ""
+
+  # Ex.: "Sgt. Vilma", "Dr. João Paulo Cândido Da Silva", "Dra. Fernanda Balbinot"
+  padrao_titulo_nome = re.compile(
+      r"\b(Dr\.?|Dra\.?|Sgt\.?|Sargento|Ten\.?|Tenente|Cap\.?|Capitão|Capitao|Maj\.?|Major|Cel\.?|Coronel|Delegado\(a\)?|Delegado|Delegada|Promotor\(a\)?|Promotor|Promotora|Juiz\(a\)?|Juiz|Juíza|Diretor\(a\)?|Diretor|Diretora|Secretário\(a\)?|Secretario|Secretaria|Coordenador\(a\)?)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç]+){0,4})",
+      re.IGNORECASE,
+  )
+  match = padrao_titulo_nome.search(texto)
+  if match:
+    cargo = match.group(1).strip()
+    autoridade = match.group(2).strip()
+    return cargo, autoridade
+
+  # Se começar com palavra típica de cargo sem nome próprio evidente
+  if re.match(
+      r"^(Diretor|Diretora|Delegado|Delegada|Promotor|Promotora|Juiz|Juíza|Coordenador|Secretário|Secretario)\b",
+      texto,
+      re.IGNORECASE,
+  ):
+    return texto, ""
+
+  return "", texto
+
+
+def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
+  """Retorna (orgao, cargo, autoridade, endereco)."""
+  limpa = re.sub(
+      r"\b(e-?mail|contato|telefone|tel|ramal\s*n[º°o.]*\s*\d*)\s*:?",
+      "",
+      texto_sem_contatos,
+      flags=re.IGNORECASE,
+  )
+  limpa = limpa.replace("*", " ")
+  # Remove observações entre parênteses soltas no fim se forem instruções de envio
+  obs_parenteses = ""
+  m_obs = re.search(r"\(([^)]*(?:enviar|ofício|oficio|agênc|agenc|nº|no)[^)]*)\)", limpa, re.IGNORECASE)
+  if m_obs:
+    obs_parenteses = m_obs.group(1).strip()
+    limpa = (limpa[:m_obs.start()] + " " + limpa[m_obs.end():]).strip()
+
+  limpa = re.sub(r"\s{2,}", " ", limpa).strip(" -–—|;,")
+
+  # Primeiro tenta dividir por separadores explícitos
+  partes = [
+      p.strip(" -–—|;,")
+      for p in re.split(r"\s+[-–—|;]+\s+", limpa)
+      if p.strip(" -–—|;,")
+  ]
+
+  orgao_base = partes[0] if len(partes) >= 1 else limpa
+  resto_partes = partes[1:] if len(partes) >= 2 else []
+
+  locais = []
+  outros = []
+
+  # Padrões que indicam endereço ou localização física
+  padrao_endereco = re.compile(
+      r"\b(Fórum\s+de\b|Forum\s+de\b|Rua\b|Av\.?|Avenida\b|Qd\.?|Quadra\b|Lt\.?|Lote\b|Setor\b|Centro\b|Parque\b|Rod\.?|Rodovia\b|BR-\d+|GO-\d+|MG-\d+|DF-\d+|BA-\d+)\b",
+      re.IGNORECASE,
+  )
+  padrao_cidade_uf = re.compile(
+      r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+){0,3})\s*[/\-]\s*(GO|MG|DF|BA|TO|MT|MS|SP|RJ|RS|PR|SC)\b",
+      re.IGNORECASE,
+  )
+
+  # Se o primeiro bloco já contiver "Fórum de..." ou endereço embutido sem traço
+  m_forum_colado = re.search(
+      r"\s+(Fórum\s+de\s+[^\s]+(?:\s+[^\s]+){0,3})$",
+      orgao_base,
+      re.IGNORECASE,
+  )
+  if m_forum_colado:
+    locais.append(m_forum_colado.group(1).strip())
+    orgao_base = orgao_base[: m_forum_colado.start()].strip()
+
+  # Verifica cidade/UF no final do órgão base (ex.: "Unaí-Mg" ou "3ª Vara Criminal Formosa/Go")
+  m_uf_fim = re.search(
+      r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç-]+)\s*[/\-]\s*(GO|MG|DF|BA|TO|MT|MS|SP|RJ|RS|PR|SC)\b$",
+      orgao_base,
+      re.IGNORECASE,
+  )
+  if m_uf_fim:
+    locais.append(m_uf_fim.group(0).strip())
+
+  for p in resto_partes:
+    if padrao_endereco.search(p) or padrao_cidade_uf.search(p):
+      locais.append(p)
+    else:
+      outros.append(p)
+
+  cargo = ""
+  autoridade = ""
+  for item in outros:
+    c, a = extrair_cargo_e_autoridade(item)
+    if c and not cargo:
+      cargo = c
+    if a and not autoridade:
+      autoridade = a
+    elif not c and not a and not autoridade:
+      autoridade = item
+
+  # Se não havia separador explícito, tenta extrair cargo/autoridade do órgão_base
+  if not autoridade and not cargo:
+    c_base, a_base = extrair_cargo_e_autoridade(orgao_base)
+    if c_base and a_base:
+      cargo = c_base
+      autoridade = a_base
+
+  endereco_final = " | ".join(dict.fromkeys(locais))
+  return orgao_base, cargo, autoridade, endereco_final + (f" ({obs_parenteses})" if obs_parenteses else "")
+
+
 def organizar_e_limpar_lista(texto_bruto: str) -> list:
   linhas_raw = [l.strip() for l in texto_bruto.splitlines() if l.strip()]
   linhas_unidas = []
@@ -137,27 +252,11 @@ def organizar_e_limpar_lista(texto_bruto: str) -> list:
     tel_str = " / ".join(dict.fromkeys([t.strip() for t in telefones]))
     sem_tel = regex_telefone.sub("", sem_email)
 
-    limpa = re.sub(
-        r"\b(e-?mail|contato|telefone|tel|ramal\s*n[º°o.]*\s*\d*)\s*:?",
-        "",
-        sem_tel,
-        flags=re.IGNORECASE,
-    )
-    limpa = limpa.replace("*", " ").strip(" -–—|;,")
-    limpa = re.sub(r"\s{2,}", " ", limpa)
-
-    partes = [
-        p.strip(" -–—|;,")
-        for p in re.split(r"\s+[-–—|;]+\s+", limpa)
-        if p.strip(" -–—|;,")
-    ]
-    orgao = partes[0] if len(partes) >= 1 else limpa
-    autoridade = partes[1] if len(partes) >= 2 else ""
-    endereco = " | ".join(partes[2:]) if len(partes) >= 3 else ""
+    orgao, cargo, autoridade, endereco = separar_local_e_orgao(sem_tel)
 
     if orgao or email_str or tel_str:
       novas_linhas.append(
-          [orgao, "", autoridade, tel_str, email_str, endereco, ""]
+          [orgao, cargo, autoridade, tel_str, email_str, endereco, ""]
       )
 
   return novas_linhas
@@ -222,7 +321,8 @@ with aba_alimentador:
   st.subheader("⚡ Colar Lista e Salvar Automaticamente na Planilha")
   st.markdown(
       "Cole a lista bruta abaixo. O sistema limpa asteriscos, junta e-mails"
-      " soltos, organiza as colunas e adiciona direto no Google Sheets."
+      " soltos, separa cargos, autoridades e endereços, e adiciona direto no"
+      " Google Sheets."
   )
 
   texto_entrada = st.text_area("Cole sua lista aqui:", height=220)
