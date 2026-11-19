@@ -8,11 +8,15 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Agenda de Autoridades - Fórum",
-    page_icon="🏛️",
+    page_title="Téo • Triagem e Endereços Oficiais — Fórum de Formosa",
+    page_icon="🤖",
     layout="wide",
 )
-st.title("🏛️ Agenda de Autoridades e Órgãos")
+st.title("🤖 Téo — Triagem e Endereços Oficiais")
+st.caption(
+    "Agente de IA • Triagem e Endereços Oficiais (Órgãos, Autoridades e"
+    " Contatos)"
+)
 
 SHEET_ID = "1PWxjWALBtB_SNNHIwPErRu5mVn5PEkZv3B8MEP79Hfg"
 SHEET_URL = (
@@ -104,12 +108,10 @@ def carregar_dados():
 
 
 def extrair_cargo_e_autoridade(trecho: str) -> tuple[str, str]:
-  """Separa cargo/título e nome de autoridade quando possível."""
   texto = trecho.strip(" -–—|;,")
   if not texto:
     return "", ""
 
-  # Ex.: "Sgt. Vilma", "Dr. João Paulo Cândido Da Silva", "Dra. Fernanda Balbinot"
   padrao_titulo_nome = re.compile(
       r"\b(Dr\.?|Dra\.?|Sgt\.?|Sargento|Ten\.?|Tenente|Cap\.?|Capitão|Capitao|Maj\.?|Major|Cel\.?|Coronel|Delegado\(a\)?|Delegado|Delegada|Promotor\(a\)?|Promotor|Promotora|Juiz\(a\)?|Juiz|Juíza|Diretor\(a\)?|Diretor|Diretora|Secretário\(a\)?|Secretario|Secretaria|Coordenador\(a\)?)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç]+){0,4})",
       re.IGNORECASE,
@@ -120,7 +122,6 @@ def extrair_cargo_e_autoridade(trecho: str) -> tuple[str, str]:
     autoridade = match.group(2).strip()
     return cargo, autoridade
 
-  # Se começar com palavra típica de cargo sem nome próprio evidente
   if re.match(
       r"^(Diretor|Diretora|Delegado|Delegada|Promotor|Promotora|Juiz|Juíza|Coordenador|Secretário|Secretario)\b",
       texto,
@@ -132,7 +133,6 @@ def extrair_cargo_e_autoridade(trecho: str) -> tuple[str, str]:
 
 
 def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
-  """Retorna (orgao, cargo, autoridade, endereco)."""
   limpa = re.sub(
       r"\b(e-?mail|contato|telefone|tel|ramal\s*n[º°o.]*\s*\d*)\s*:?",
       "",
@@ -140,16 +140,19 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
       flags=re.IGNORECASE,
   )
   limpa = limpa.replace("*", " ")
-  # Remove observações entre parênteses soltas no fim se forem instruções de envio
+
   obs_parenteses = ""
-  m_obs = re.search(r"\(([^)]*(?:enviar|ofício|oficio|agênc|agenc|nº|no)[^)]*)\)", limpa, re.IGNORECASE)
+  m_obs = re.search(
+      r"\(([^)]*(?:enviar|ofício|oficio|agênc|agenc|nº|no)[^)]*)\)",
+      limpa,
+      re.IGNORECASE,
+  )
   if m_obs:
     obs_parenteses = m_obs.group(1).strip()
-    limpa = (limpa[:m_obs.start()] + " " + limpa[m_obs.end():]).strip()
+    limpa = (limpa[: m_obs.start()] + " " + limpa[m_obs.end() :]).strip()
 
   limpa = re.sub(r"\s{2,}", " ", limpa).strip(" -–—|;,")
 
-  # Primeiro tenta dividir por separadores explícitos
   partes = [
       p.strip(" -–—|;,")
       for p in re.split(r"\s+[-–—|;]+\s+", limpa)
@@ -162,7 +165,6 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
   locais = []
   outros = []
 
-  # Padrões que indicam endereço ou localização física
   padrao_endereco = re.compile(
       r"\b(Fórum\s+de\b|Forum\s+de\b|Rua\b|Av\.?|Avenida\b|Qd\.?|Quadra\b|Lt\.?|Lote\b|Setor\b|Centro\b|Parque\b|Rod\.?|Rodovia\b|BR-\d+|GO-\d+|MG-\d+|DF-\d+|BA-\d+)\b",
       re.IGNORECASE,
@@ -172,7 +174,6 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
       re.IGNORECASE,
   )
 
-  # Se o primeiro bloco já contiver "Fórum de..." ou endereço embutido sem traço
   m_forum_colado = re.search(
       r"\s+(Fórum\s+de\s+[^\s]+(?:\s+[^\s]+){0,3})$",
       orgao_base,
@@ -182,7 +183,6 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
     locais.append(m_forum_colado.group(1).strip())
     orgao_base = orgao_base[: m_forum_colado.start()].strip()
 
-  # Verifica cidade/UF no final do órgão base (ex.: "Unaí-Mg" ou "3ª Vara Criminal Formosa/Go")
   m_uf_fim = re.search(
       r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç-]+)\s*[/\-]\s*(GO|MG|DF|BA|TO|MT|MS|SP|RJ|RS|PR|SC)\b$",
       orgao_base,
@@ -208,7 +208,6 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
     elif not c and not a and not autoridade:
       autoridade = item
 
-  # Se não havia separador explícito, tenta extrair cargo/autoridade do órgão_base
   if not autoridade and not cargo:
     c_base, a_base = extrair_cargo_e_autoridade(orgao_base)
     if c_base and a_base:
@@ -216,7 +215,14 @@ def separar_local_e_orgao(texto_sem_contatos: str) -> tuple[str, str, str, str]:
       autoridade = a_base
 
   endereco_final = " | ".join(dict.fromkeys(locais))
-  return orgao_base, cargo, autoridade, endereco_final + (f" ({obs_parenteses})" if obs_parenteses else "")
+  if obs_parenteses:
+    endereco_final = (
+        f"{endereco_final} ({obs_parenteses})".strip()
+        if endereco_final
+        else f"({obs_parenteses})"
+    )
+
+  return orgao_base, cargo, autoridade, endereco_final
 
 
 def organizar_e_limpar_lista(texto_bruto: str) -> list:
@@ -262,17 +268,18 @@ def organizar_e_limpar_lista(texto_bruto: str) -> list:
   return novas_linhas
 
 
-aba_consulta, aba_alimentador = st.tabs(
-    ["🔍 Consulta Rápida", "⚡ Alimentador Automático (Grava Direto)"]
-)
+aba_consulta, aba_alimentador = st.tabs([
+    "🔍 Triagem e Consulta Rápida",
+    "⚡ Téo — Alimentador de Endereços e Contatos",
+])
 
 with aba_consulta:
   df = carregar_dados()
   if not df.empty:
     termo = st.text_input(
-        "🔍 Pesquisar Órgão, Autoridade ou Cargo:",
+        "🔍 Pesquisar Órgão, Autoridade, Cargo ou Local:",
         "",
-        placeholder="Ex: forum, 3a vara, luziania, delegacia...",
+        placeholder="Ex: forum, 3a vara, formosa, luziania, delegacia...",
     )
     if termo:
       mask = df.apply(lambda row: corresponde_busca(row, termo), axis=1)
@@ -318,18 +325,18 @@ with aba_consulta:
         st.markdown("---")
 
 with aba_alimentador:
-  st.subheader("⚡ Colar Lista e Salvar Automaticamente na Planilha")
+  st.subheader("⚡ Téo — Triar Lista e Gravar Direto na Planilha")
   st.markdown(
-      "Cole a lista bruta abaixo. O sistema limpa asteriscos, junta e-mails"
-      " soltos, separa cargos, autoridades e endereços, e adiciona direto no"
-      " Google Sheets."
+      "Cole a lista bruta abaixo. O **Téo** limpa asteriscos, junta e-mails"
+      " soltos, separa órgão, cargo/autoridade e endereço oficial, e salva"
+      " direto no Google Sheets."
   )
 
   texto_entrada = st.text_area("Cole sua lista aqui:", height=220)
 
-  if st.button("🚀 Organizar e Gravar Direto na Planilha", type="primary"):
+  if st.button("🚀 Téo: Organizar e Gravar na Planilha", type="primary"):
     if texto_entrada.strip():
-      with st.spinner("Organizando e salvando na planilha..."):
+      with st.spinner("Téo organizando e salvando na planilha..."):
         try:
           linhas_prontas = organizar_e_limpar_lista(texto_entrada)
           aba_sheet = conectar_planilha()
@@ -338,8 +345,8 @@ with aba_alimentador:
           )
           st.cache_data.clear()
           st.success(
-              f"✅ Pronto! {len(linhas_prontas)} contatos foram organizados e"
-              " gravados diretamente na planilha!"
+              f"✅ Pronto! O Téo organizou e gravou {len(linhas_prontas)}"
+              " contato(s) diretamente na planilha!"
           )
           st.dataframe(
               pd.DataFrame(linhas_prontas, columns=COLUNAS_OFICIAIS),
