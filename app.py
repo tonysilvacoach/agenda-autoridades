@@ -197,3 +197,214 @@ def carregar_dados():
   try:
     df = pd.read_csv(SHEET_URL, skiprows=4)
     df["_linha_sheet"] = df.index + HEADER_ROW_INDEX + 1
+    df = df.dropna(subset=["Órgão / Instituição"]).copy()
+    for col in COLUNAS_OFICIAIS:
+      if col not in df.columns:
+        df[col] = ""
+      df[col] = df[col].apply(limpar_valor)
+    return df
+  except Exception as e:
+    st.error(f"Erro ao carregar dados: {e}")
+    return pd.DataFrame()
+
+
+def extrair_cargo_e_autoridade(trecho: str) -> tuple[str, str]:
+  texto = trecho.strip(" -–—|;,")
+  if not texto:
+    return "", ""
+
+  padrao_titulo_nome = re.compile(
+      r"\b(Dr\.?|Dra\.?|Sgt\.?|Sargento|Ten\.?|Tenente|Cap\.?|Capitão|Capitao|Maj\.?|Major|Cel\.?|Coronel|Delegado\(a\)?|Delegado|Delegada|Promotor\(a\)?|Promotor|Promotora|Juiz\(a\)?|Juiz|Juíza|Diretor\(a\)?|Diretor|Diretora|Secretário\(a\)?|Secretario|Secretaria|Coordenador\(a\)?)\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç]+){0,4})",
+      re.IGNORECASE,
+  )
+  match = padrao_titulo_nome.search(texto)
+  if match:
+    cargo = match.group(1).strip()
+    autoridade = match.group(2).strip()
+    return cargo, autoridade
+
+  if re.match(
+      r"^(Diretor|Diretora|Delegado|Delegada|Promotor|Promotora|Juiz|Juíza|Coordenador|Secretário|Secretario)\b",
+      texto,
+      re.IGNORECASE,
+  ):
+    return texto, ""
+
+  return "", texto
+
+
+def separar_local_e_orgao(
+    texto_sem_contatos: str,
+) -> tuple[str, str, str, str, str]:
+  limpa = re.sub(
+      r"\b(e-?mail|contato|telefone|tel|ramal\s*n[º°o.]*\s*\d*)\s*:?",
+      "",
+      texto_sem_contatos,
+      flags=re.IGNORECASE,
+  )
+  limpa = limpa.replace("*", " ")
+
+  observacoes = []
+  for m_obs in re.finditer(r"\(([^)]+)\)", limpa):
+    conteudo_par = m_obs.group(1).strip()
+    if re.search(
+        r"(enviar|ofício|oficio|agênc|agenc|nº|no\b|assunto|e-?mail|ramal|whatsapp|plantão|plantao)",
+        conteudo_par,
+        re.IGNORECASE,
+    ):
+      observacoes.append(conteudo_par)
+
+  limpa = re.sub(r"\([^)]*\)", " ", limpa)
+  limpa = re.sub(r"\s{2,}", " ", limpa).strip(" -–—|;,")
+
+  partes = [
+      p.strip(" -–—|;,")
+      for p in re.split(r"\s+[-–—|;]+\s+", limpa)
+      if p.strip(" -–—|;,")
+  ]
+
+  orgao_base = partes[0] if len(partes) >= 1 else limpa
+  resto_partes = partes[1:] if len(partes) >= 2 else []
+
+  locais = []
+  outros = []
+
+  padrao_endereco = re.compile(
+      r"\b(Fórum\s+de\b|Forum\s+de\b|Rua\b|Av\.?|Avenida\b|Qd\.?|Quadra\b|Lt\.?|Lote\b|Setor\b|Centro\b|Parque\b|Rod\.?|Rodovia\b|BR-\d+|GO-\d+|MG-\d+|DF-\d+|BA-\d+)\b",
+      re.IGNORECASE,
+  )
+  padrao_cidade_uf = re.compile(
+      r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç]+){0,3})\s*[/\-]\s*(GO|MG|DF|BA|TO|MT|MS|SP|RJ|RS|PR|SC)\b",
+      re.IGNORECASE,
+  )
+
+  m_forum_colado = re.search(
+      r"\s+(Fórum\s+de\s+[^\s]+(?:\s+[^\s]+){0,3})$",
+      orgao_base,
+      re.IGNORECASE,
+  )
+  if m_forum_colado:
+    locais.append(m_forum_colado.group(1).strip())
+    orgao_base = orgao_base[: m_forum_colado.start()].strip()
+
+  m_uf_fim = re.search(
+      r"\b([A-ZÁÉÍÓÚÂÊÔÃÕÇa-zàéíóúâêôãõç-]+)\s*[/\-]\s*(GO|MG|DF|BA|TO|MT|MS|SP|RJ|RS|PR|SC)\b$",
+      orgao_base,
+      re.IGNORECASE,
+  )
+  if m_uf_fim:
+    locais.append(m_uf_fim.group(0).strip())
+
+  for p in resto_partes:
+    if padrao_endereco.search(p) or padrao_cidade_uf.search(p):
+      locais.append(p)
+    else:
+      outros.append(p)
+
+  cargo = ""
+  autoridade = ""
+  for item in outros:
+    c, a = extrair_cargo_e_autoridade(item)
+    if c and not cargo:
+      cargo = c
+    if a and not autoridade:
+      autoridade = a
+    elif not c and not a and not autoridade:
+      autoridade = item
+
+  if not autoridade and not cargo:
+    c_base, a_base = extrair_cargo_e_autoridade(orgao_base)
+    if c_base and a_base:
+      cargo = c_base
+      autoridade = a_base
+
+  endereco_final = " | ".join(dict.fromkeys(locais))
+  obs_final = " | ".join(dict.fromkeys(observacoes))
+  return orgao_base, cargo, autoridade, endereco_final, obs_final
+
+
+def organizar_e_limpar_lista(texto_bruto: str) -> list:
+  linhas_raw = [l.strip() for l in texto_bruto.splitlines() if l.strip()]
+  linhas_unidas = []
+
+  regex_email = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+  for linha in linhas_raw:
+    if (
+        linha.lower().startswith("destinatário:")
+        or linha.lower().startswith("destinatario:")
+        or linha == "*"
+    ):
+      continue
+    so_email = regex_email.sub("", linha).replace("*", "").strip(" -:|")
+    if linhas_unidas and not so_email and regex_email.search(linha):
+      linhas_unidas[-1] += " " + linha
+    else:
+      linhas_unidas.append(linha)
+
+  regex_telefone = re.compile(
+      r"(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}"
+  )
+  novas_linhas = []
+
+  for linha in linhas_unidas:
+    emails = regex_email.findall(linha)
+    email_str = ", ".join(dict.fromkeys(emails))
+    sem_email = regex_email.sub("", linha)
+
+    telefones = regex_telefone.findall(sem_email)
+    tel_str = " / ".join(dict.fromkeys([t.strip() for t in telefones]))
+    sem_tel = regex_telefone.sub("", sem_email)
+
+    orgao, cargo, autoridade, endereco, obs = separar_local_e_orgao(sem_tel)
+
+    if orgao or email_str or tel_str:
+      novas_linhas.append([
+          True,
+          orgao,
+          cargo,
+          autoridade,
+          tel_str,
+          email_str,
+          endereco,
+          obs,
+      ])
+
+  return novas_linhas
+
+
+def verificar_duplicados(
+    linhas_df: pd.DataFrame, df_existente: pd.DataFrame
+) -> list:
+  if df_existente.empty or linhas_df.empty:
+    return []
+  duplicados = []
+  for idx, r in linhas_df.iterrows():
+    org_n = normalizar_busca(r.get("Órgão / Instituição", ""))
+    mail_n = normalizar_busca(r.get("E-mail Institucional", ""))
+    tel_n = re.sub(r"\D", "", str(r.get("Telefone / WhatsApp", "")))
+
+    for _, ex in df_existente.iterrows():
+      org_ex = normalizar_busca(ex.get("Órgão / Instituição", ""))
+      mail_ex = normalizar_busca(ex.get("E-mail Institucional", ""))
+      tel_ex = re.sub(r"\D", "", str(ex.get("Telefone / WhatsApp", "")))
+
+      mesmo_org = bool(org_n and org_ex and org_n == org_ex)
+      mesmo_mail = bool(mail_n and mail_ex and mail_n in mail_ex)
+      mesmo_tel = bool(tel_n and tel_ex and len(tel_n) >= 8 and tel_n in tel_ex)
+
+      if (mesmo_org and (mesmo_mail or mesmo_tel)) or (mesmo_mail and mesmo_tel):
+        duplicados.append(
+            f"Linha {idx + 1}: {r.get('Órgão / Instituição', '')}"
+        )
+        break
+  return duplicados
+
+
+def limpar_busca_callback():
+  st.session_state["busca_termo"] = ""
+
+
+df_base = carregar_dados()
+
+aba_consulta
